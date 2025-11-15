@@ -1,0 +1,6 @@
+{
+  "/api/ads": "/ads",
+  "/api/ads/:id": "/ads/:id",
+  "/api/statistics": "/statistics"
+}
+

@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  server:
+    image: node:20-alpine
+    container_name: avito-moderation-server
+    working_dir: /app
+    volumes:
+      - ./server:/app
+    ports:
+      - "3001:3001"
+    command: npx json-server --watch db.json --port 3001 --host 0.0.0.0
+    networks:
+      - avito-network
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: avito-moderation-client
+    ports:
+      - "3000:80"
+    depends_on:
+      - server
+    networks:
+      - avito-network
+
+networks:
+  avito-network:
+    driver: bridge
+
