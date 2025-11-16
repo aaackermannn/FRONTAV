@@ -1,18 +1,21 @@
-export type AdStatus = 'pending' | 'approved' | 'rejected' | 'rework';
+export type AdStatus = 'pending' | 'approved' | 'rejected' | 'draft';
 export type Priority = 'normal' | 'urgent';
 
 export interface Seller {
+  id: number;
   name: string;
   rating: number;
-  adsCount: number;
-  registrationDate: string;
+  totalAds: number;
+  registeredAt: string;
 }
 
 export interface ModerationHistoryItem {
   id: number;
-  moderator: string;
-  action: 'approved' | 'rejected' | 'rework';
-  comment?: string;
+  moderatorId: number;
+  moderatorName: string;
+  action: 'approved' | 'rejected' | 'requestChanges';
+  reason: string | null;
+  comment: string | null;
   timestamp: string;
 }
 
@@ -21,6 +24,7 @@ export interface Ad {
   title: string;
   price: number;
   category: string;
+  categoryId: number;
   description: string;
   images: string[];
   characteristics: Record<string, string>;
@@ -28,43 +32,46 @@ export interface Ad {
   status: AdStatus;
   priority: Priority;
   createdAt: string;
+  updatedAt: string;
   moderationHistory: ModerationHistoryItem[];
 }
 
+export interface SummaryStats {
+  totalReviewed: number;
+  totalReviewedToday: number;
+  totalReviewedThisWeek: number;
+  totalReviewedThisMonth: number;
+  approvedPercentage: number;
+  rejectedPercentage: number;
+  requestChangesPercentage: number;
+  averageReviewTime: number;
+}
+
+export interface ActivityChartItem {
+  date: string;
+  approved: number;
+  rejected: number;
+  requestChanges: number;
+}
+
+export interface DecisionsChart {
+  approved: number;
+  rejected: number;
+  requestChanges: number;
+}
+
+export interface CategoriesChart {
+  [category: string]: number;
+}
+
 export interface Statistics {
-  today: {
-    checked: number;
-    approved: number;
-    rejected: number;
-    rework: number;
-    avgTime: number;
-  };
-  week: {
-    checked: number;
-    approved: number;
-    rejected: number;
-    rework: number;
-    avgTime: number;
-  };
-  month: {
-    checked: number;
-    approved: number;
-    rejected: number;
-    rework: number;
-    avgTime: number;
-  };
-  activityByDay: Array<{
-    date: string;
-    count: number;
-  }>;
-  byCategory: Array<{
-    category: string;
-    count: number;
-  }>;
+  summary: SummaryStats;
+  activityChart: ActivityChartItem[];
+  decisionsChart: DecisionsChart;
+  categoriesChart: CategoriesChart;
 }
 
 export interface RejectionReason {
   id: string;
   label: string;
 }
-

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Card,
@@ -29,9 +29,10 @@ import {
   RightOutlined,
 } from '@ant-design/icons';
 import { apiClient } from '../api/client';
-import { Ad, RejectionReason } from '../types';
+import { RejectionReason } from '../types';
 import dayjs from 'dayjs';
 import { useHotkeys } from '../hooks/useHotkeys';
+import { generatePlaceholder } from '../utils/placeholder';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -48,7 +49,6 @@ const REJECTION_REASONS: RejectionReason[] = [
 const AdDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [rejectModalVisible, setRejectModalVisible] = useState(false);
   const [rejectionReason, setRejectionReason] = useState<string>('');
@@ -63,20 +63,57 @@ const AdDetail = () => {
   });
 
   const { data: adsData } = useQuery({
-    queryKey: ['ads'],
+    queryKey: ['ads', 'all'],
     queryFn: () => apiClient.getAds({ limit: 1000 }),
   });
 
-  const updateStatusMutation = useMutation({
-    mutationFn: (updates: Partial<Ad>) => apiClient.updateAd(adId, updates),
+  const approveMutation = useMutation({
+    mutationFn: () => apiClient.approveAd(adId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['ad', adId] });
       queryClient.invalidateQueries({ queryKey: ['ads'] });
-      queryClient.invalidateQueries({ queryKey: ['statistics'] });
-      message.success('Статус объявления обновлён');
+      queryClient.invalidateQueries({ queryKey: ['summaryStats'] });
+      queryClient.invalidateQueries({ queryKey: ['activityChart'] });
+      queryClient.invalidateQueries({ queryKey: ['decisionsChart'] });
+      queryClient.invalidateQueries({ queryKey: ['categoriesChart'] });
+      message.success('Объявление одобрено');
     },
     onError: () => {
-      message.error('Ошибка при обновлении статуса');
+      message.error('Ошибка при одобрении объявления');
+    },
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: (data: { reason: string; comment?: string }) =>
+      apiClient.rejectAd(adId, data.reason, data.comment),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ad', adId] });
+      queryClient.invalidateQueries({ queryKey: ['ads'] });
+      queryClient.invalidateQueries({ queryKey: ['summaryStats'] });
+      queryClient.invalidateQueries({ queryKey: ['activityChart'] });
+      queryClient.invalidateQueries({ queryKey: ['decisionsChart'] });
+      queryClient.invalidateQueries({ queryKey: ['categoriesChart'] });
+      message.success('Объявление отклонено');
+    },
+    onError: () => {
+      message.error('Ошибка при отклонении объявления');
+    },
+  });
+
+  const requestChangesMutation = useMutation({
+    mutationFn: (data: { reason: string; comment?: string }) =>
+      apiClient.requestChanges(adId, data.reason, data.comment),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ad', adId] });
+      queryClient.invalidateQueries({ queryKey: ['ads'] });
+      queryClient.invalidateQueries({ queryKey: ['summaryStats'] });
+      queryClient.invalidateQueries({ queryKey: ['activityChart'] });
+      queryClient.invalidateQueries({ queryKey: ['decisionsChart'] });
+      queryClient.invalidateQueries({ queryKey: ['categoriesChart'] });
+      message.success('Запрос изменений отправлен');
+    },
+    onError: () => {
+      message.error('Ошибка при запросе изменений');
     },
   });
 
@@ -89,20 +126,7 @@ const AdDetail = () => {
 
   const handleApprove = () => {
     if (!ad) return;
-    updateStatusMutation.mutate({
-      ...ad,
-      status: 'approved',
-      moderationHistory: [
-        ...ad.moderationHistory,
-        {
-          id: Date.now(),
-          moderator: 'Иван',
-          action: 'approved',
-          comment: 'Одобрено модератором',
-          timestamp: new Date().toISOString(),
-        },
-      ],
-    });
+    approveMutation.mutate();
   };
 
   const handleReject = () => {
@@ -118,22 +142,11 @@ const AdDetail = () => {
     if (!ad) return;
 
     const reasonLabel =
-      REJECTION_REASONS.find((r) => r.id === rejectionReason)?.label ||
-      rejectionComment;
+      REJECTION_REASONS.find((r) => r.id === rejectionReason)?.label || rejectionComment;
 
-    updateStatusMutation.mutate({
-      ...ad,
-      status: 'rejected',
-      moderationHistory: [
-        ...ad.moderationHistory,
-        {
-          id: Date.now(),
-          moderator: 'Иван',
-          action: 'rejected',
-          comment: reasonLabel,
-          timestamp: new Date().toISOString(),
-        },
-      ],
+    rejectMutation.mutate({
+      reason: reasonLabel,
+      comment: rejectionComment || undefined,
     });
 
     setRejectModalVisible(false);
@@ -143,19 +156,9 @@ const AdDetail = () => {
 
   const handleRework = () => {
     if (!ad) return;
-    updateStatusMutation.mutate({
-      ...ad,
-      status: 'rework',
-      moderationHistory: [
-        ...ad.moderationHistory,
-        {
-          id: Date.now(),
-          moderator: 'Иван',
-          action: 'rework',
-          comment: 'Требуется доработка',
-          timestamp: new Date().toISOString(),
-        },
-      ],
+    requestChangesMutation.mutate({
+      reason: 'Требуется доработка',
+      comment: 'Требуется доработка',
     });
   };
 
@@ -186,9 +189,7 @@ const AdDetail = () => {
   );
 
   if (isLoading) {
-    return (
-      <Spin size="large" style={{ display: 'block', textAlign: 'center', padding: 50 }} />
-    );
+    return <Spin size="large" style={{ display: 'block', textAlign: 'center', padding: 50 }} />;
   }
 
   if (!ad) {
@@ -208,13 +209,11 @@ const AdDetail = () => {
     },
   ];
 
-  const characteristicsData = Object.entries(ad.characteristics).map(
-    ([key, value], index) => ({
-      key: index,
-      characteristic: key,
-      value: value,
-    })
-  );
+  const characteristicsData = Object.entries(ad.characteristics).map(([key, value], index) => ({
+    key: index,
+    characteristic: key,
+    value: value,
+  }));
 
   const getStatusColor = (action: string) => {
     switch (action) {
@@ -222,7 +221,7 @@ const AdDetail = () => {
         return 'green';
       case 'rejected':
         return 'red';
-      case 'rework':
+      case 'requestChanges':
         return 'orange';
       default:
         return 'default';
@@ -235,7 +234,7 @@ const AdDetail = () => {
         return 'Одобрено';
       case 'rejected':
         return 'Отклонено';
-      case 'rework':
+      case 'requestChanges':
         return 'На доработке';
       default:
         return action;
@@ -267,17 +266,22 @@ const AdDetail = () => {
       <Row gutter={24}>
         <Col xs={24} lg={12}>
           <Card title="Галерея" style={{ marginBottom: 24 }}>
-            <Carousel>
-              {ad.images.map((image, index) => (
-                <div key={index}>
-                  <Image
-                    src={image}
-                    alt={`${ad.title} - изображение ${index + 1}`}
-                    style={{ width: '100%', height: 400, objectFit: 'cover' }}
-                  />
-                </div>
-              ))}
-            </Carousel>
+            <Image.PreviewGroup>
+              <Carousel>
+                {ad.images.map((_, index) => (
+                  <div key={index}>
+                    <Image
+                      src={generatePlaceholder(800, 400, `${ad.title} - ${index + 1}`)}
+                      alt={`${ad.title} - изображение ${index + 1}`}
+                      style={{ width: '100%', height: 400, objectFit: 'cover' }}
+                      preview={{
+                        mask: 'Увеличить',
+                      }}
+                    />
+                  </div>
+                ))}
+              </Carousel>
+            </Image.PreviewGroup>
           </Card>
 
           <Card title="Полное описание">
@@ -300,11 +304,9 @@ const AdDetail = () => {
               <Descriptions.Item label="Рейтинг">
                 <Tag color="gold">{ad.seller.rating}</Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="Объявлений">
-                {ad.seller.adsCount}
-              </Descriptions.Item>
+              <Descriptions.Item label="Объявлений">{ad.seller.totalAds}</Descriptions.Item>
               <Descriptions.Item label="На сайте">
-                {dayjs().diff(dayjs(ad.seller.registrationDate), 'year')} лет
+                {dayjs().diff(dayjs(ad.seller.registeredAt), 'year')} лет
               </Descriptions.Item>
             </Descriptions>
           </Card>
@@ -327,19 +329,21 @@ const AdDetail = () => {
                     <Space direction="vertical" style={{ width: '100%' }}>
                       <div>
                         <Text strong>Модератор: </Text>
-                        <Text>{item.moderator}</Text>
+                        <Text>{item.moderatorName}</Text>
                       </div>
                       <div>
                         <Text strong>Дата: </Text>
-                        <Text>
-                          {dayjs(item.timestamp).format('DD.MM.YYYY HH:mm')}
-                        </Text>
+                        <Text>{dayjs(item.timestamp).format('DD.MM.YYYY HH:mm')}</Text>
                       </div>
                       <div>
-                        <Tag color={getStatusColor(item.action)}>
-                          {getStatusText(item.action)}
-                        </Tag>
+                        <Tag color={getStatusColor(item.action)}>{getStatusText(item.action)}</Tag>
                       </div>
+                      {item.reason && (
+                        <div>
+                          <Text strong>Причина: </Text>
+                          <Text>{item.reason}</Text>
+                        </div>
+                      )}
                       {item.comment && (
                         <div>
                           <Text strong>Комментарий: </Text>
@@ -363,7 +367,7 @@ const AdDetail = () => {
                 size="large"
                 block
                 onClick={handleApprove}
-                loading={updateStatusMutation.isPending}
+                loading={approveMutation.isPending}
                 style={{ background: '#52c41a', borderColor: '#52c41a' }}
               >
                 ✓ Одобрить (A)
@@ -374,7 +378,7 @@ const AdDetail = () => {
                 size="large"
                 block
                 onClick={() => setRejectModalVisible(true)}
-                loading={updateStatusMutation.isPending}
+                loading={rejectMutation.isPending}
               >
                 ✗ Отклонить (D)
               </Button>
@@ -383,7 +387,7 @@ const AdDetail = () => {
                 size="large"
                 block
                 onClick={handleRework}
-                loading={updateStatusMutation.isPending}
+                loading={requestChangesMutation.isPending}
                 style={{ color: '#faad14', borderColor: '#faad14' }}
               >
                 ↻ Доработка
@@ -436,4 +440,3 @@ const AdDetail = () => {
 };
 
 export default AdDetail;
-

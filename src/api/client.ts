@@ -1,19 +1,29 @@
 import axios, { AxiosInstance, CancelTokenSource } from 'axios';
-import { Ad, Statistics } from '../types';
+import { Ad, SummaryStats, ActivityChartItem, DecisionsChart, CategoriesChart } from '../types';
 
+/**
+ * API клиент для взаимодействия с backend сервером
+ * Обеспечивает централизованное управление HTTP-запросами,
+ * отмену запросов при навигации и обработку ошибок
+ */
 class ApiClient {
   private client: AxiosInstance;
   private cancelTokens: Map<string, CancelTokenSource> = new Map();
 
   constructor() {
     this.client = axios.create({
-      baseURL: '/api',
+      baseURL: '/api/v1',
       headers: {
         'Content-Type': 'application/json',
       },
     });
   }
 
+  /**
+   * Отменяет активный запрос по ключу
+   * Используется для прерывания запросов при переходе между страницами
+   * @param key - уникальный ключ запроса
+   */
   cancelRequest(key: string) {
     const cancelToken = this.cancelTokens.get(key);
     if (cancelToken) {
@@ -22,12 +32,22 @@ class ApiClient {
     }
   }
 
+  /**
+   * Создает токен отмены для запроса
+   * @param key - уникальный ключ для идентификации запроса
+   * @returns CancelTokenSource для использования в запросе
+   */
   private createCancelToken(key: string): CancelTokenSource {
     const source = axios.CancelToken.source();
     this.cancelTokens.set(key, source);
     return source;
   }
 
+  /**
+   * Получает список объявлений с фильтрацией, сортировкой и пагинацией
+   * @param params - параметры фильтрации и пагинации
+   * @returns Объект с массивом объявлений и общим количеством
+   */
   async getAds(params: {
     status?: string[];
     category?: string;
@@ -41,78 +61,71 @@ class ApiClient {
   }): Promise<{ data: Ad[]; total: number }> {
     const cancelToken = this.createCancelToken('getAds');
     try {
-      const response = await this.client.get<Ad[]>('/ads', {
-        params,
-        cancelToken: cancelToken.token,
-      });
-
-      let filtered = [...response.data];
+      const apiParams: any = {
+        page: params.page || 1,
+        limit: params.limit || 10,
+        sortBy: params.sortBy === 'date' ? 'createdAt' : params.sortBy || 'createdAt',
+        sortOrder: params.sortOrder || 'desc',
+      };
 
       if (params.status && params.status.length > 0) {
-        filtered = filtered.filter((ad) => params.status!.includes(ad.status));
+        apiParams.status = params.status;
       }
 
       if (params.category) {
-        filtered = filtered.filter((ad) => ad.category === params.category);
+        // Маппинг названий категорий в их ID для API
+        const categoryMap: Record<string, number> = {
+          Электроника: 0,
+          Недвижимость: 1,
+          Транспорт: 2,
+          Работа: 3,
+          Услуги: 4,
+          Животные: 5,
+          Мода: 6,
+          Детское: 7,
+        };
+        apiParams.categoryId = categoryMap[params.category];
       }
 
       if (params.minPrice !== undefined) {
-        filtered = filtered.filter((ad) => ad.price >= params.minPrice!);
+        apiParams.minPrice = params.minPrice;
       }
 
       if (params.maxPrice !== undefined) {
-        filtered = filtered.filter((ad) => ad.price <= params.maxPrice!);
+        apiParams.maxPrice = params.maxPrice;
       }
 
       if (params.search) {
-        const searchLower = params.search.toLowerCase();
-        filtered = filtered.filter((ad) =>
-          ad.title.toLowerCase().includes(searchLower)
-        );
+        apiParams.search = params.search;
       }
 
-      if (params.sortBy) {
-        filtered.sort((a, b) => {
-          let aVal: any;
-          let bVal: any;
+      const response = await this.client.get<{
+        ads: Ad[];
+        pagination: {
+          currentPage: number;
+          totalPages: number;
+          totalItems: number;
+          itemsPerPage: number;
+        };
+      }>('/ads', {
+        params: apiParams,
+        cancelToken: cancelToken.token,
+      });
 
-          switch (params.sortBy) {
-            case 'date':
-              aVal = new Date(a.createdAt).getTime();
-              bVal = new Date(b.createdAt).getTime();
-              break;
-            case 'price':
-              aVal = a.price;
-              bVal = b.price;
-              break;
-            case 'priority':
-              aVal = a.priority === 'urgent' ? 1 : 0;
-              bVal = b.priority === 'urgent' ? 1 : 0;
-              break;
-            default:
-              return 0;
-          }
-
-          if (params.sortOrder === 'desc') {
-            return bVal - aVal;
-          }
-          return aVal - bVal;
-        });
-      }
-
-      const total = filtered.length;
-      const page = params.page || 1;
-      const limit = params.limit || 10;
-      const start = (page - 1) * limit;
-      const end = start + limit;
-      const paginated = filtered.slice(start, end);
-
-      return { data: paginated, total };
+      return {
+        data: response.data.ads,
+        total: response.data.pagination.totalItems,
+      };
     } finally {
       this.cancelTokens.delete('getAds');
     }
   }
 
+  /**
+   * Получает объявление по ID
+   * @param id - идентификатор объявления
+   * @returns Объект объявления с полной информацией
+   */
   async getAdById(id: number): Promise<Ad> {
     const cancelToken = this.createCancelToken(`getAd-${id}`);
     try {
@@ -125,32 +138,135 @@ class ApiClient {
     }
   }
 
-  async updateAd(id: number, updates: Partial<Ad>): Promise<Ad> {
-    const response = await this.client.put<Ad>(`/ads/${id}`, updates);
-    return response.data;
+  /**
+   * Одобряет объявление
+   * @param id - идентификатор объявления
+   * @returns Обновленное объявление
+   */
+  async approveAd(id: number): Promise<Ad> {
+    const response = await this.client.post<{ message: string; ad: Ad }>(`/ads/${id}/approve`);
+    return response.data.ad;
   }
 
-  async getStatistics(): Promise<Statistics> {
-    const cancelToken = this.createCancelToken('getStatistics');
+  /**
+   * Отклоняет объявление с указанием причины
+   * @param id - идентификатор объявления
+   * @param reason - причина отклонения
+   * @param comment - дополнительный комментарий (опционально)
+   * @returns Обновленное объявление
+   */
+  async rejectAd(id: number, reason: string, comment?: string): Promise<Ad> {
+    const response = await this.client.post<{ message: string; ad: Ad }>(`/ads/${id}/reject`, {
+      reason,
+      comment,
+    });
+    return response.data.ad;
+  }
+
+  /**
+   * Отправляет объявление на доработку
+   * @param id - идентификатор объявления
+   * @param reason - причина возврата на доработку
+   * @param comment - дополнительный комментарий (опционально)
+   * @returns Обновленное объявление
+   */
+  async requestChanges(id: number, reason: string, comment?: string): Promise<Ad> {
+    const response = await this.client.post<{ message: string; ad: Ad }>(
+      `/ads/${id}/request-changes`,
+      { reason, comment }
+    );
+    return response.data.ad;
+  }
+
+  /**
+   * Получает общую статистику модератора за указанный период
+   * @param period - период: 'today', 'week' или 'month'
+   * @returns Объект с метриками статистики
+   */
+  async getSummaryStats(period?: string): Promise<SummaryStats> {
+    const cancelToken = this.createCancelToken('getSummaryStats');
     try {
-      const response = await this.client.get<Statistics>('/statistics', {
+      const response = await this.client.get<SummaryStats>('/stats/summary', {
+        params: period ? { period } : {},
         cancelToken: cancelToken.token,
       });
       return response.data;
     } finally {
-      this.cancelTokens.delete('getStatistics');
+      this.cancelTokens.delete('getSummaryStats');
     }
   }
 
+  /**
+   * Получает данные для графика активности по дням
+   * @param period - период: 'today', 'week' или 'month'
+   * @returns Массив данных активности по дням
+   */
+  async getActivityChart(period?: string): Promise<ActivityChartItem[]> {
+    const cancelToken = this.createCancelToken('getActivityChart');
+    try {
+      const response = await this.client.get<ActivityChartItem[]>('/stats/chart/activity', {
+        params: period ? { period } : {},
+        cancelToken: cancelToken.token,
+      });
+      return response.data;
+    } finally {
+      this.cancelTokens.delete('getActivityChart');
+    }
+  }
+
+  /**
+   * Получает данные для круговой диаграммы распределения решений
+   * @param period - период: 'today', 'week' или 'month'
+   * @returns Объект с количеством решений каждого типа
+   */
+  async getDecisionsChart(period?: string): Promise<DecisionsChart> {
+    const cancelToken = this.createCancelToken('getDecisionsChart');
+    try {
+      const response = await this.client.get<DecisionsChart>('/stats/chart/decisions', {
+        params: period ? { period } : {},
+        cancelToken: cancelToken.token,
+      });
+      return response.data;
+    } finally {
+      this.cancelTokens.delete('getDecisionsChart');
+    }
+  }
+
+  /**
+   * Получает данные для графика распределения по категориям
+   * @param period - период: 'today', 'week' или 'month'
+   * @returns Объект с количеством объявлений по категориям
+   */
+  async getCategoriesChart(period?: string): Promise<CategoriesChart> {
+    const cancelToken = this.createCancelToken('getCategoriesChart');
+    try {
+      const response = await this.client.get<CategoriesChart>('/stats/chart/categories', {
+        params: period ? { period } : {},
+        cancelToken: cancelToken.token,
+      });
+      return response.data;
+    } finally {
+      this.cancelTokens.delete('getCategoriesChart');
+    }
+  }
+
+  /**
+   * Получает список всех уникальных категорий из объявлений
+   * @returns Массив названий категорий
+   */
   async getCategories(): Promise<string[]> {
     const cancelToken = this.createCancelToken('getCategories');
     try {
-      const response = await this.client.get<Ad[]>('/ads', {
+      // Загружаем большое количество объявлений для извлечения всех категорий
+      const response = await this.client.get<{
+        ads: Ad[];
+        pagination: any;
+      }>('/ads', {
+        params: { limit: 1000 },
         cancelToken: cancelToken.token,
       });
-      const categories = Array.from(
-        new Set(response.data.map((ad) => ad.category))
-      );
+      // Извлекаем уникальные категории из массива объявлений
+      const categories = Array.from(new Set(response.data.ads.map((ad) => ad.category)));
       return categories;
     } finally {
       this.cancelTokens.delete('getCategories');
@@ -159,4 +275,3 @@ class ApiClient {
 }
 
 export const apiClient = new ApiClient();
-

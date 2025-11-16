@@ -17,17 +17,23 @@ import {
   Empty,
   InputNumber,
   message,
+  Badge,
+  Popover,
 } from 'antd';
 import {
   SearchOutlined,
   ReloadOutlined,
   CheckOutlined,
   CloseOutlined,
+  BellOutlined,
+  SaveOutlined,
+  FolderOutlined,
 } from '@ant-design/icons';
 import { apiClient } from '../api/client';
-import { Ad, AdStatus } from '../types';
+import { AdStatus } from '../types';
 import dayjs from 'dayjs';
 import { useHotkeys } from '../hooks/useHotkeys';
+import { generatePlaceholder } from '../utils/placeholder';
 
 const { Option } = Select;
 const { Text } = Typography;
@@ -36,22 +42,21 @@ const STATUS_OPTIONS: { label: string; value: AdStatus }[] = [
   { label: 'На модерации', value: 'pending' },
   { label: 'Одобрено', value: 'approved' },
   { label: 'Отклонено', value: 'rejected' },
-  { label: 'На доработке', value: 'rework' },
+  { label: 'На доработке', value: 'draft' },
 ];
 
 const AdsList = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [savedFilters, setSavedFilters] = useState<Array<{ name: string; params: string }>>(() =>
+    JSON.parse(localStorage.getItem('savedFilters') || '[]')
+  );
 
-  const status = searchParams.get('status')?.split(',') || [];
+  const status = (searchParams.get('status')?.split(',') || []) as AdStatus[];
   const category = searchParams.get('category') || undefined;
-  const minPrice = searchParams.get('minPrice')
-    ? Number(searchParams.get('minPrice'))
-    : undefined;
-  const maxPrice = searchParams.get('maxPrice')
-    ? Number(searchParams.get('maxPrice'))
-    : undefined;
+  const minPrice = searchParams.get('minPrice') ? Number(searchParams.get('minPrice')) : undefined;
+  const maxPrice = searchParams.get('maxPrice') ? Number(searchParams.get('maxPrice')) : undefined;
   const search = searchParams.get('search') || '';
   const sortBy = searchParams.get('sortBy') || 'date';
   const sortOrder = searchParams.get('sortOrder') || 'desc';
@@ -63,17 +68,7 @@ const AdsList = () => {
   });
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: [
-      'ads',
-      status,
-      category,
-      minPrice,
-      maxPrice,
-      search,
-      sortBy,
-      sortOrder,
-      page,
-    ],
+    queryKey: ['ads', status, category, minPrice, maxPrice, search, sortBy, sortOrder, page],
     queryFn: () =>
       apiClient.getAds({
         status: status.length > 0 ? (status as AdStatus[]) : undefined,
@@ -86,9 +81,22 @@ const AdsList = () => {
         page,
         limit: 10,
       }),
+    refetchInterval: 30000,
   });
 
-  const updateParams = (updates: Record<string, string | undefined>) => {
+  const [newAdsCount, setNewAdsCount] = useState(0);
+  const [lastCheckedCount, setLastCheckedCount] = useState(0);
+
+  useEffect(() => {
+    if (data?.total !== undefined) {
+      if (lastCheckedCount > 0 && data.total > lastCheckedCount) {
+        setNewAdsCount(data.total - lastCheckedCount);
+      }
+      setLastCheckedCount(data.total);
+    }
+  }, [data?.total, lastCheckedCount]);
+
+  const updateParams = (updates: Record<string, string | undefined>, resetPage = true) => {
     const newParams = new URLSearchParams(searchParams);
     Object.entries(updates).forEach(([key, value]) => {
       if (value === undefined || value === '') {
@@ -97,8 +105,11 @@ const AdsList = () => {
         newParams.set(key, value);
       }
     });
-        newParams.set('page', '1');
-        setSearchParams(newParams);
+    // Сбрасываем страницу только если это не изменение самой страницы
+    if (resetPage && !updates.hasOwnProperty('page')) {
+      newParams.set('page', '1');
+    }
+    setSearchParams(newParams);
   };
 
   const handleStatusChange = (values: AdStatus[]) => {
@@ -134,12 +145,30 @@ const AdsList = () => {
     setSelectedIds([]);
   };
 
-  const handleSelectAll = (checked: boolean) => {
-    if (checked) {
-      setSelectedIds(data?.data.map((ad) => ad.id) || []);
-    } else {
-      setSelectedIds([]);
+  const handleSaveFilter = () => {
+    const filterName = prompt('Введите название набора фильтров:');
+    if (filterName && filterName.trim()) {
+      const newSaved = [
+        ...savedFilters,
+        { name: filterName.trim(), params: searchParams.toString() },
+      ];
+      setSavedFilters(newSaved);
+      localStorage.setItem('savedFilters', JSON.stringify(newSaved));
+      message.success('Набор фильтров сохранён');
     }
+  };
+
+  const handleLoadFilter = (params: string) => {
+    const newParams = new URLSearchParams(params);
+    setSearchParams(newParams);
+    message.success('Набор фильтров загружен');
+  };
+
+  const handleDeleteFilter = (index: number) => {
+    const newSaved = savedFilters.filter((_, i) => i !== index);
+    setSavedFilters(newSaved);
+    localStorage.setItem('savedFilters', JSON.stringify(newSaved));
+    message.success('Набор фильтров удалён');
   };
 
   const handleSelectItem = (id: number, checked: boolean) => {
@@ -153,23 +182,7 @@ const AdsList = () => {
   const handleBulkApprove = async () => {
     try {
       for (const id of selectedIds) {
-        const ad = data?.data.find((a) => a.id === id);
-        if (ad) {
-          await apiClient.updateAd(id, {
-            ...ad,
-            status: 'approved',
-            moderationHistory: [
-              ...ad.moderationHistory,
-              {
-                id: Date.now(),
-                moderator: 'Иван',
-                action: 'approved',
-                comment: 'Массовое одобрение',
-                timestamp: new Date().toISOString(),
-              },
-            ],
-          });
-        }
+        await apiClient.approveAd(id);
       }
       message.success(`Одобрено объявлений: ${selectedIds.length}`);
       setSelectedIds([]);
@@ -182,23 +195,7 @@ const AdsList = () => {
   const handleBulkReject = async () => {
     try {
       for (const id of selectedIds) {
-        const ad = data?.data.find((a) => a.id === id);
-        if (ad) {
-          await apiClient.updateAd(id, {
-            ...ad,
-            status: 'rejected',
-            moderationHistory: [
-              ...ad.moderationHistory,
-              {
-                id: Date.now(),
-                moderator: 'Иван',
-                action: 'rejected',
-                comment: 'Массовое отклонение',
-                timestamp: new Date().toISOString(),
-              },
-            ],
-          });
-        }
+        await apiClient.rejectAd(id, 'Массовое отклонение', 'Массовое отклонение');
       }
       message.success(`Отклонено объявлений: ${selectedIds.length}`);
       setSelectedIds([]);
@@ -212,10 +209,15 @@ const AdsList = () => {
     {
       key: '/',
       handler: () => {
-        const searchInput = document.querySelector(
-          'input[placeholder*="Поиск"]'
-        ) as HTMLInputElement;
-        searchInput?.focus();
+        // Ищем поле поиска по data-атрибуту или placeholder
+        const searchInput =
+          (document.querySelector('input[data-testid="search-input"]') as HTMLInputElement) ||
+          (document.querySelector('input[placeholder*="Поиск"]') as HTMLInputElement) ||
+          (document.querySelector('input[placeholder*="поиск"]') as HTMLInputElement);
+        if (searchInput) {
+          searchInput.focus();
+          searchInput.select();
+        }
       },
     },
   ]);
@@ -225,21 +227,81 @@ const AdsList = () => {
       pending: { color: 'orange', text: 'На модерации' },
       approved: { color: 'green', text: 'Одобрено' },
       rejected: { color: 'red', text: 'Отклонено' },
-      rework: { color: 'yellow', text: 'На доработке' },
+      draft: { color: 'yellow', text: 'На доработке' },
     };
     const config = statusConfig[status];
     return <Tag color={config.color}>{config.text}</Tag>;
   };
 
   return (
-    <div>
+    <div style={{ animation: 'fadeIn 0.3s ease-in' }}>
+      {newAdsCount > 0 && (
+        <Card
+          style={{
+            marginBottom: 24,
+            background: '#e6f7ff',
+            border: '1px solid #91d5ff',
+            animation: 'slideDown 0.3s ease-out',
+          }}
+        >
+          <Space>
+            <Badge count={newAdsCount} showZero={false}>
+              <BellOutlined style={{ fontSize: 20 }} />
+            </Badge>
+            <Text strong>Новых объявлений: {newAdsCount}</Text>
+            <Button
+              size="small"
+              onClick={() => {
+                setNewAdsCount(0);
+                refetch();
+              }}
+            >
+              Обновить
+            </Button>
+          </Space>
+        </Card>
+      )}
       <Card
         title="Фильтры"
         style={{ marginBottom: 24 }}
         extra={
-          <Button icon={<ReloadOutlined />} onClick={handleResetFilters}>
-            Сбросить
-          </Button>
+          <Space>
+            {savedFilters.length > 0 && (
+              <Popover
+                content={
+                  <div>
+                    {savedFilters.map((filter, index) => (
+                      <div key={index} style={{ marginBottom: 8 }}>
+                        <Space>
+                          <Button type="link" onClick={() => handleLoadFilter(filter.params)}>
+                            {filter.name}
+                          </Button>
+                          <Button
+                            type="link"
+                            danger
+                            size="small"
+                            onClick={() => handleDeleteFilter(index)}
+                          >
+                            Удалить
+                          </Button>
+                        </Space>
+                      </div>
+                    ))}
+                  </div>
+                }
+                title="Сохранённые наборы фильтров"
+                trigger="click"
+              >
+                <Button icon={<FolderOutlined />}>Загрузить</Button>
+              </Popover>
+            )}
+            <Button icon={<SaveOutlined />} onClick={handleSaveFilter}>
+              Сохранить
+            </Button>
+            <Button icon={<ReloadOutlined />} onClick={handleResetFilters}>
+              Сбросить
+            </Button>
+          </Space>
         }
       >
         <Space direction="vertical" style={{ width: '100%' }} size="middle">
@@ -282,18 +344,14 @@ const AdsList = () => {
                 <InputNumber
                   placeholder="От"
                   value={minPrice}
-                  onChange={(val) =>
-                    handlePriceRangeChange(val, maxPrice || null)
-                  }
+                  onChange={(val) => handlePriceRangeChange(val, maxPrice || null)}
                   style={{ width: '100%' }}
                   min={0}
                 />
                 <InputNumber
                   placeholder="До"
                   value={maxPrice}
-                  onChange={(val) =>
-                    handlePriceRangeChange(minPrice || null, val)
-                  }
+                  onChange={(val) => handlePriceRangeChange(minPrice || null, val)}
                   style={{ width: '100%' }}
                   min={0}
                 />
@@ -307,6 +365,7 @@ const AdsList = () => {
                 value={search}
                 onChange={(e) => handleSearchChange(e.target.value)}
                 style={{ marginTop: 8 }}
+                data-testid="search-input"
               />
             </Col>
           </Row>
@@ -330,8 +389,7 @@ const AdsList = () => {
                   type={sortBy === 'priority' ? 'primary' : 'default'}
                   onClick={() => handleSortChange('priority')}
                 >
-                  По приоритету{' '}
-                  {sortBy === 'priority' && (sortOrder === 'asc' ? '↑' : '↓')}
+                  По приоритету {sortBy === 'priority' && (sortOrder === 'asc' ? '↑' : '↓')}
                 </Button>
               </Space>
             </Col>
@@ -343,18 +401,10 @@ const AdsList = () => {
         <Card style={{ marginBottom: 24, background: '#e6f7ff' }}>
           <Space>
             <Text strong>Выбрано: {selectedIds.length}</Text>
-            <Button
-              type="primary"
-              icon={<CheckOutlined />}
-              onClick={handleBulkApprove}
-            >
+            <Button type="primary" icon={<CheckOutlined />} onClick={handleBulkApprove}>
               Одобрить все
             </Button>
-            <Button
-              danger
-              icon={<CloseOutlined />}
-              onClick={handleBulkReject}
-            >
+            <Button danger icon={<CloseOutlined />} onClick={handleBulkReject}>
               Отклонить все
             </Button>
             <Button onClick={() => setSelectedIds([])}>Отменить выбор</Button>
@@ -369,14 +419,23 @@ const AdsList = () => {
       ) : (
         <>
           <Row gutter={[16, 16]}>
-            {data.data.map((ad) => (
-              <Col key={ad.id} xs={24} sm={12} lg={8} xl={6}>
+            {data.data.map((ad, index) => (
+              <Col
+                key={ad.id}
+                xs={24}
+                sm={12}
+                lg={8}
+                xl={6}
+                style={{
+                  animation: `fadeInUp 0.4s ease-out ${index * 0.05}s both`,
+                }}
+              >
                 <Card
                   hoverable
                   cover={
                     <img
                       alt={ad.title}
-                      src={ad.images[0]}
+                      src={generatePlaceholder(400, 200, ad.title)}
                       style={{ height: 200, objectFit: 'cover' }}
                     />
                   }
@@ -388,10 +447,7 @@ const AdsList = () => {
                     >
                       Выбрать
                     </Checkbox>,
-                    <Button
-                      type="link"
-                      onClick={() => navigate(`/item/${ad.id}`)}
-                    >
+                    <Button type="link" onClick={() => navigate(`/item/${ad.id}`)}>
                       Открыть →
                     </Button>,
                   ]}
@@ -400,9 +456,7 @@ const AdsList = () => {
                     title={
                       <Space>
                         {ad.title}
-                        {ad.priority === 'urgent' && (
-                          <Tag color="red">Срочно</Tag>
-                        )}
+                        {ad.priority === 'urgent' && <Tag color="red">Срочно</Tag>}
                       </Space>
                     }
                     description={
@@ -431,7 +485,7 @@ const AdsList = () => {
               pageSize={10}
               showSizeChanger={false}
               showTotal={(total) => `Всего: ${total} объявлений`}
-              onChange={(newPage) => updateParams({ page: String(newPage) })}
+              onChange={(newPage) => updateParams({ page: String(newPage) }, false)}
             />
           </div>
         </>
@@ -441,4 +495,3 @@ const AdsList = () => {
 };
 
 export default AdsList;
-

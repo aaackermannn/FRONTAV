@@ -12,7 +12,13 @@ function App() {
     <BrowserRouter>
       <Layout style={{ minHeight: '100vh' }}>
         <AppHeader />
-        <Content style={{ padding: '24px', background: 'transparent' }}>
+        <Content
+          style={{
+            padding: '24px',
+            background: 'transparent',
+            transition: 'opacity 0.3s ease-in',
+          }}
+        >
           <Routes>
             <Route path="/" element={<Navigate to="/list" replace />} />
             <Route path="/list" element={<AdsList />} />
@@ -26,4 +32,3 @@ function App() {
 }
 
 export default App;
-

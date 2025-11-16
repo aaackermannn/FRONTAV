@@ -6,10 +6,10 @@ services:
     container_name: avito-moderation-server
     working_dir: /app
     volumes:
-      - ./server:/app
+      - ./tech-int3-server:/app
     ports:
       - "3001:3001"
-    command: npx json-server --watch db.json --port 3001 --host 0.0.0.0
+    command: npm start
     networks:
       - avito-network
 
